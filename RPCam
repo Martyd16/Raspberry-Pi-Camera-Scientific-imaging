@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# contact angle camera control (MP4 output)
+# Date: April 22, 2026
+
+set -euo pipefail
+IFS=$'\n\t'
+
+trap 'echo "Interrupted"; exit 130' INT TERM
+Constants
+
+FILENAME="vid.mp4"
+OUT_BASE="/home/contactangle/Vids"
+WAITTIME=1
+
+
+# Prompt user (reasonable defaults)
+
+read -p "Enter output folder name [$(date +'%Y_%m_%d_%I_%M_%p')]: " fileoutput
+fileoutput=${fileoutput:-$(date +"%Y_%m_%d_%I_%M_%p")}
+
+read -p "Set Width Default [1920]: " wide
+wide=${wide:-1920}
+
+read -p "Set Height Default [1080]: " high
+high=${high:-1080}
+
+read -p "Set Framerate Default [60]: " frame
+frame=${frame:-60}
+
+read -p "Set Recording Length (seconds) Default [30]: " duration
+duration=${duration:-30}
+durationms=$((duration * 1000))
+Basic numeric validation
+
+for var_name in wide high frame duration; do
+val="${!var_name}"
+if ! [[ $val =~ ^[0-9]+$ ]] || [ "$val" -le 0 ]; then
+echo "Invalid value for $var_name: $val" >&2
+exit 1
+fi
+done
+
+#Paths
+
+mkdir -p "$OUT_BASE/$fileoutput/VID"
+mkdir -p "$OUT_BASE/$fileoutput/JPG"
+camfile="$OUT_BASE/$fileoutput/VID/$FILENAME"
+jpg_pattern="$OUT_BASE/$fileoutput/JPG/img_%04d.jpg"
+
+# Check required commands
+
+command -v rpicam-vid >/dev/null 2>&1 || { echo "rpicam-vid not found in PATH" >&2; exit 1; }
+command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg not found in PATH" >&2; exit 1; }
+
+# Remove existing camfile if present to avoid overwrite issues
+
+rm -f "$camfile"
+
+# Capture (rpicam-vid: -t in milliseconds — verify your tool expects ms)
+
+if ! rpicam-vid --saturation 0 --width "$wide" --height "$high" --framerate "$frame" -t "$durationms" -o "$camfile"; then
+echo "Camera capture failed" >&2
+exit 1
+fi
+
+sleep "$WAITTIME"
+
+# Convert MP4 to JPEG sequence
+ # Use temporary dir to avoid partial results on failure
+
+tmp_jpg_dir="$(mktemp -d "$OUT_BASE/tmp_jpg_XXXX")"
+trap 'rm -rf "$tmp_jpg_dir"' EXIT
+
+if ! ffmpeg -y -i "$camfile" -q:v 3 "$tmp_jpg_dir/img_%04d.jpg"; then
+echo "ffmpeg conversion failed" >&2
+exit 1
+fi
+
+# Move converted images into final folder
+
+mv "$tmp_jpg_dir"/* "$OUT_BASE/$fileoutput/JPG/"
+rm -rf "$tmp_jpg_dir"
+trap - EXIT
+
+echo "Saved JPEGs to: $OUT_BASE/$fileoutput/JPG"*
